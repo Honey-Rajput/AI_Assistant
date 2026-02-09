@@ -42,13 +42,13 @@ if "chat_model" not in st.session_state:
 if "doc_type" not in st.session_state:
     st.session_state.doc_type = "general"
 
-# ✅ Track last uploaded file to reset chat properly
-if "last_file" not in st.session_state:
-    st.session_state.last_file = None
+# ✅ Track last uploaded files (MULTI PDF)
+if "last_files" not in st.session_state:
+    st.session_state.last_files = None
 
 
 # ============================================================
-# Document Type Detector (Improved)
+# Document Type Detector
 # ============================================================
 def detect_document_type(text):
 
@@ -79,86 +79,98 @@ def detect_document_type(text):
 st.markdown("""
 <div style="text-align:center; padding:20px;">
     <h1 style="color:#0A66C2;">💬 AI Document Assistant</h1>
-    <p>Upload PDFs and chat with them using Qdrant Cloud</p>
+    
 </div>
 """, unsafe_allow_html=True)
 
 
 # ============================================================
-# SIDEBAR UPLOAD
+# SIDEBAR UPLOAD (MULTIPLE PDFs FIXED)
 # ============================================================
 with st.sidebar:
 
-    st.header("📁 Upload PDF Document")
+    st.header("📁 Upload PDF Documents")
 
-    uploaded_file = st.file_uploader("Choose a PDF file", type=["pdf"])
+    # ✅ MULTIPLE FILE UPLOAD ENABLED
+    uploaded_files = st.file_uploader(
+        "Choose PDF file(s)",
+        type=["pdf"],
+        accept_multiple_files=True
+    )
 
-    if uploaded_file:
+    if uploaded_files:
 
-        st.success("✅ File uploaded successfully!")
+        st.success(f"✅ {len(uploaded_files)} file(s) uploaded successfully!")
 
-        if st.button("🚀 Process Document"):
+        if st.button("🚀 Process Documents"):
 
-            # ✅ Reset chat if new file uploaded
-            if uploaded_file.name != st.session_state.last_file:
+            # ✅ Reset chat if new files uploaded
+            current_files = [file.name for file in uploaded_files]
+
+            if current_files != st.session_state.last_files:
                 st.session_state.messages = []
-                st.session_state.last_file = uploaded_file.name
+                st.session_state.last_files = current_files
 
-            with st.spinner("Processing PDF..."):
+            with st.spinner("Processing PDFs..."):
 
-                # ============================================================
-                # Extract Full Text (for doc type detection)
-                # ============================================================
-                full_text = extract_text_from_pdf(uploaded_file)
-
-                if full_text.strip() == "":
-                    st.error("❌ No readable text found (PDF may be scanned).")
-                    st.stop()
+                all_chunks = []
+                combined_text = ""
 
                 # ============================================================
-                # Detect Document Type
+                # Loop Through All PDFs
                 # ============================================================
-                doc_type = detect_document_type(full_text)
+                for uploaded_file in uploaded_files:
+
+                    # Extract Full Text
+                    full_text = extract_text_from_pdf(uploaded_file)
+
+                    if full_text.strip() == "":
+                        st.error(f"❌ No readable text found in {uploaded_file.name}")
+                        continue
+
+                    combined_text += full_text + "\n"
+
+                    # Save each PDF temporarily
+                    temp_name = f"temp_{uploaded_file.name}"
+
+                    with open(temp_name, "wb") as f:
+                        f.write(uploaded_file.getbuffer())
+
+                    # Load PDF with metadata
+                    loader = PyPDFLoader(temp_name)
+                    pages = loader.load()
+
+                    # Chunking
+                    splitter = RecursiveCharacterTextSplitter(
+                        chunk_size=1000,
+                        chunk_overlap=200
+                    )
+
+                    chunks = splitter.split_documents(pages)
+                    all_chunks.extend(chunks)
+
+                # ============================================================
+                # Detect Document Type (Combined)
+                # ============================================================
+                doc_type = detect_document_type(combined_text)
                 st.session_state.doc_type = doc_type
 
                 st.info(f"📌 Detected Document Type: {doc_type.upper()}")
 
                 # ============================================================
-                # ✅ Save PDF temporarily (Required for PyPDFLoader)
-                # ============================================================
-                with open("temp.pdf", "wb") as f:
-                    f.write(uploaded_file.getbuffer())
-
-                # ============================================================
-                # ✅ Load PDF with Page Metadata
-                # ============================================================
-                loader = PyPDFLoader("temp.pdf")
-                pages = loader.load()
-
-                # ============================================================
-                # Chunking With Metadata (TOC + Page Index Fix)
-                # ============================================================
-                splitter = RecursiveCharacterTextSplitter(
-                    chunk_size=1000,
-                    chunk_overlap=200
-                )
-
-                chunks = splitter.split_documents(pages)
-
-                # ============================================================
                 # Limit Chunks
                 # ============================================================
                 MAX_CHUNKS = 3000
-                if len(chunks) > MAX_CHUNKS:
-                    st.warning(f"⚠️ Large PDF detected. Using first {MAX_CHUNKS} chunks.")
-                    chunks = chunks[:MAX_CHUNKS]
+                if len(all_chunks) > MAX_CHUNKS:
+                    st.warning(f"⚠️ Large PDFs detected. Using first {MAX_CHUNKS} chunks.")
+                    all_chunks = all_chunks[:MAX_CHUNKS]
 
-                st.write("✅ Total Chunks Created:", len(chunks))
+                st.write("✅ Total Chunks Created:", len(all_chunks))
 
                 # ============================================================
                 # Upload to Qdrant
                 # ============================================================
-                qdrant_client = create_qdrant_index(chunks)
+                qdrant_client = create_qdrant_index(all_chunks)
                 st.session_state.qdrant_client = qdrant_client
 
                 # ============================================================
@@ -167,13 +179,13 @@ with st.sidebar:
                 chat_model = get_chat_model(api_key=EURI_API_KEY)
                 st.session_state.chat_model = chat_model
 
-                st.success("✅ Document Indexed Successfully!")
+                st.success("✅ All Documents Indexed Successfully!")
 
 
 # ============================================================
 # CHAT UI
 # ============================================================
-st.subheader("💬 Chat with Your Document")
+st.subheader("💬 Chat with Your Documents")
 
 # Show chat history
 for msg in st.session_state.messages:
@@ -184,7 +196,7 @@ for msg in st.session_state.messages:
 # ============================================================
 # USER INPUT
 # ============================================================
-if prompt := st.chat_input("Ask something about your uploaded document..."):
+if prompt := st.chat_input("Ask something about your uploaded documents..."):
 
     # Store user message
     st.session_state.messages.append({"role": "user", "content": prompt})
@@ -199,9 +211,9 @@ if prompt := st.chat_input("Ask something about your uploaded document..."):
 
         with st.chat_message("assistant"):
 
-            with st.spinner("🔍 Searching document..."):
+            with st.spinner("🔍 Searching documents..."):
 
-                # Retrieve relevant chunks (with page info)
+                # Retrieve relevant chunks
                 relevant_chunks = retrive_similar_documents(
                     st.session_state.qdrant_client,
                     prompt,
@@ -213,13 +225,11 @@ if prompt := st.chat_input("Ask something about your uploaded document..."):
                 doc_type = st.session_state.doc_type
 
                 # ============================================================
-                # ✅ ORIGINAL PROMPTS RESTORED
+                # PROMPTS
                 # ============================================================
-
                 if doc_type == "medical":
                     system_prompt = f"""You are MediChat Pro, an intelligent medical document assistant. 
-Based on the following medical documents, provide accurate and helpful answers. 
-If the information is not in the documents, clearly state that.
+Answer based only on the documents.
 
 Medical Documents:
 {context}
@@ -229,9 +239,7 @@ User Question: {prompt}
 Answer:"""
 
                 elif doc_type == "financial":
-                    system_prompt = f"""You are FinDoc Pro, an intelligent financial document assistant.
-Based on the following financial documents, answer clearly.
-If the answer is not present, say so honestly.
+                    system_prompt = f"""You are FinDoc Pro, an intelligent financial assistant.
 
 Financial Documents:
 {context}
@@ -241,8 +249,7 @@ User Question: {prompt}
 Answer:"""
 
                 elif doc_type == "legal":
-                    system_prompt = f"""You are LawDoc Pro, an intelligent legal document assistant.
-Answer only based on the legal document context.
+                    system_prompt = f"""You are LawDoc Pro, an intelligent legal assistant.
 
 Legal Documents:
 {context}
@@ -253,8 +260,6 @@ Answer:"""
 
                 else:
                     system_prompt = f"""You are DocChat Pro, an intelligent document assistant.
-Based on the following uploaded documents, answer accurately.
-If the answer is not in the documents, clearly mention it.
 
 Documents:
 {context}
@@ -277,4 +282,4 @@ Answer:"""
             )
 
     else:
-        st.error("⚠️ Please upload and process a document first!")
+        st.error("⚠️ Please upload and process documents first!")
