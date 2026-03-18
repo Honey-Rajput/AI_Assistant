@@ -1,7 +1,14 @@
 import streamlit as st
 import os
+import threading
+import requests
+import time
 from dotenv import load_dotenv
 
+try:
+    from streamlit_autorefresh import st_autorefresh
+except ImportError:
+    st_autorefresh = None
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import PyPDFLoader
 
@@ -25,6 +32,36 @@ st.set_page_config(
     page_icon="💬",
     layout="wide"
 )
+
+# ============================================================
+# KEEP ALIVE HACK
+# ============================================================
+if st_autorefresh:
+    st_autorefresh(interval=600000, key="keep_alive")
+
+
+
+# ============================================================
+# EXTREME KEEP ALIVE HACK (Background Pinger)
+# ============================================================
+APP_URL = os.getenv("APP_URL", "https://your-streamlit-app-url.streamlit.app")
+
+def keep_alive_ping():
+    while True:
+        try:
+            requests.get(APP_URL, timeout=10)
+        except Exception:
+            pass
+        time.sleep(300) # Ping every 5 minutes
+
+@st.cache_resource
+def start_ping_thread():
+    thread = threading.Thread(target=keep_alive_ping, daemon=True)
+    thread.start()
+    return thread
+
+# Start ping thread
+start_ping_thread()
 
 
 # ============================================================

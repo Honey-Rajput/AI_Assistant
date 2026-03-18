@@ -22,3 +22,6 @@ python-dotenv
 
 # EURI (only if used)
 euriai
+
+# To keep the app awake
+streamlit-autorefresh
