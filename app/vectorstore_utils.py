@@ -24,17 +24,25 @@ def get_qdrant_client():
     return QdrantClient(
         url=QDRANT_URL,
         api_key=QDRANT_API_KEY,
-        prefer_grpc=True,
+        prefer_grpc=False,
         timeout=180
     )
 
 
 def reset_collection(client):
-
-    existing = [c.name for c in client.get_collections().collections]
+    try:
+        print("Connection to Qdrant..")
+        collections=client.get_collections()
+        existing = [c.name for c in collections.collections]
+        print("Connected successfully:",existing)
+    except Exception as e:
+        print("Connection failed:",str(e))
+        raise e
 
     if COLLECTION_NAME in existing:
+        print(f"Collection {COLLECTION_NAME} already exists. Deleting...")
         client.delete_collection(COLLECTION_NAME)
+    print(f"Creating collection {COLLECTION_NAME}...")
 
     client.create_collection(
         collection_name=COLLECTION_NAME,
