@@ -3,6 +3,7 @@ import os
 import threading
 import requests
 import time
+from datetime import datetime
 from dotenv import load_dotenv
 
 try:
@@ -228,6 +229,11 @@ st.subheader("💬 Chat with Your Documents")
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
+        if msg.get("time"):
+            st.markdown(
+                f"<span style='font-size:0.8rem; color:#6c757d;'>⏱ {msg['time']}</span>",
+                unsafe_allow_html=True
+            )
 
 
 # ============================================================
@@ -236,10 +242,20 @@ for msg in st.session_state.messages:
 if prompt := st.chat_input("Ask something about your uploaded documents..."):
 
     # Store user message
-    st.session_state.messages.append({"role": "user", "content": prompt})
+    
+    timestamp = datetime.now().strftime("%H:%M:%S")
+    st.session_state.messages.append({
+        "role": "user",
+        "content": prompt,
+        "time": timestamp
+    })
 
     with st.chat_message("user"):
         st.markdown(prompt)
+        st.markdown(
+            f"<span style='font-size:0.8rem; color:#6c757d;'>⏱ {timestamp}</span>",
+            unsafe_allow_html=True
+        )
 
     # ============================================================
     # Assistant Response
@@ -312,10 +328,15 @@ Answer:"""
                 )
 
             st.markdown(response)
+            assistant_time = datetime.now().strftime("%H:%M:%S")
+            st.markdown(
+                f"<span style='font-size:0.8rem; color:#6c757d;'>⏱ {assistant_time}</span>",
+                unsafe_allow_html=True
+            )
 
             # Store assistant response
             st.session_state.messages.append(
-                {"role": "assistant", "content": response}
+                {"role": "assistant", "content": response, "time": assistant_time}
             )
 
     else:
