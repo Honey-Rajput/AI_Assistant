@@ -8,7 +8,6 @@ from qdrant_client.models import PointStruct, VectorParams, Distance
 
 from sentence_transformers import SentenceTransformer
 
-
 load_dotenv()
 
 QDRANT_URL = os.getenv("QDRANT_URL")
@@ -16,10 +15,14 @@ QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")
 
 COLLECTION_NAME = "eurontest"
 
+# ✅ Load embedding model (768 dim)
 model = SentenceTransformer("sentence-transformers/all-mpnet-base-v2")
 VECTOR_SIZE = model.get_sentence_embedding_dimension()
 
 
+# ============================================================
+# GET CLIENT
+# ============================================================
 def get_qdrant_client():
     return QdrantClient(
         url=QDRANT_URL,
@@ -29,41 +32,46 @@ def get_qdrant_client():
     )
 
 
-def reset_collection(client):
+# ============================================================
+# CREATE COLLECTION ONLY IF NOT EXISTS (FIXED)
+# ============================================================
+def create_collection_if_not_exists(client):
     try:
-        print("Connection to Qdrant..")
-        collections=client.get_collections()
+        collections = client.get_collections()
         existing = [c.name for c in collections.collections]
-        print("Connected successfully:",existing)
+
+        if COLLECTION_NAME not in existing:
+            print(f"Creating collection: {COLLECTION_NAME}")
+
+            client.create_collection(
+                collection_name=COLLECTION_NAME,
+                vectors_config=VectorParams(
+                    size=VECTOR_SIZE,
+                    distance=Distance.COSINE
+                )
+            )
+        else:
+            print(f"Collection already exists: {COLLECTION_NAME}")
+
     except Exception as e:
-        print("Connection failed:",str(e))
+        print("Error checking/creating collection:", str(e))
         raise e
 
-    if COLLECTION_NAME in existing:
-        print(f"Collection {COLLECTION_NAME} already exists. Deleting...")
-        client.delete_collection(COLLECTION_NAME)
-    print(f"Creating collection {COLLECTION_NAME}...")
 
-    client.create_collection(
-        collection_name=COLLECTION_NAME,
-        vectors_config=VectorParams(
-            size=VECTOR_SIZE,
-            distance=Distance.COSINE
-        )
-    )
-
-
-# ✅ Store page metadata
+# ============================================================
+# CREATE INDEX (FIXED)
+# ============================================================
 def create_qdrant_index(chunks, batch_size=50):
 
     client = get_qdrant_client()
-    reset_collection(client)
+
+    # ✅ FIX: DO NOT DELETE COLLECTION
+    create_collection_if_not_exists(client)
 
     points_batch = []
 
     for chunk in tqdm(chunks):
 
-        # Extract text + page
         text = chunk.page_content
         page = chunk.metadata.get("page", "unknown")
 
@@ -99,7 +107,9 @@ def create_qdrant_index(chunks, batch_size=50):
     return client
 
 
-# ✅ Retrieval returns text + page
+# ============================================================
+# RETRIEVE DOCUMENTS
+# ============================================================
 def retrive_similar_documents(client, query, k=5):
 
     query_vector = model.encode(str(query)).tolist()
