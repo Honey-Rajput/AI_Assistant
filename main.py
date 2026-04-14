@@ -1,15 +1,8 @@
 import streamlit as st
 import os
-import threading
-import requests
-import time
 from datetime import datetime
 from dotenv import load_dotenv
 
-try:
-    from streamlit_autorefresh import st_autorefresh
-except ImportError:
-    st_autorefresh = None
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import PyPDFLoader
 
@@ -17,13 +10,11 @@ from app.pdf_utils import extract_text_from_pdf
 from app.chat_utilis import get_chat_model, ask_chat_model
 from app.vectorstore_utils import create_qdrant_index, retrive_similar_documents
 
-
 # ============================================================
-# Load ENV Keys
+# LOAD ENV
 # ============================================================
 load_dotenv()
 EURI_API_KEY = os.getenv("EURI_API_KEY")
-
 
 # ============================================================
 # PAGE CONFIG
@@ -35,38 +26,7 @@ st.set_page_config(
 )
 
 # ============================================================
-# KEEP ALIVE HACK
-# ============================================================
-if st_autorefresh:
-    st_autorefresh(interval=600000, key="keep_alive")
-
-
-
-# ============================================================
-# EXTREME KEEP ALIVE HACK (Background Pinger)
-# ============================================================
-APP_URL = os.getenv("APP_URL", "https://your-streamlit-app-url.streamlit.app")
-
-def keep_alive_ping():
-    while True:
-        try:
-            requests.get(APP_URL, timeout=10)
-        except Exception:
-            pass
-        time.sleep(300) # Ping every 5 minutes
-
-@st.cache_resource
-def start_ping_thread():
-    thread = threading.Thread(target=keep_alive_ping, daemon=True)
-    thread.start()
-    return thread
-
-# Start ping thread
-start_ping_thread()
-
-
-# ============================================================
-# SESSION STATE INIT
+# SESSION STATE INIT (VERY IMPORTANT)
 # ============================================================
 if "messages" not in st.session_state:
     st.session_state.messages = []
@@ -77,39 +37,8 @@ if "qdrant_client" not in st.session_state:
 if "chat_model" not in st.session_state:
     st.session_state.chat_model = None
 
-if "doc_type" not in st.session_state:
-    st.session_state.doc_type = "general"
-
-# ✅ Track last uploaded files (MULTI PDF)
-if "last_files" not in st.session_state:
-    st.session_state.last_files = None
-
-
-# ============================================================
-# Document Type Detector
-# ============================================================
-def detect_document_type(text):
-
-    text = text.lower()
-
-    keyword_sets = {
-        "medical": ["diagnosis", "prescription", "treatment", "hospital"],
-        "financial": ["profit", "income", "revenue", "balance sheet"],
-        "legal": ["agreement", "court", "contract"]
-    }
-
-    scores = {}
-
-    for dtype, keywords in keyword_sets.items():
-        scores[dtype] = sum(text.count(word) for word in keywords)
-
-    best_type = max(scores, key=scores.get)
-
-    if scores[best_type] < 2:
-        return "general"
-
-    return best_type
-
+if "processed" not in st.session_state:
+    st.session_state.processed = False   # ✅ THIS FIXES YOUR ERROR
 
 # ============================================================
 # HEADER
@@ -117,19 +46,16 @@ def detect_document_type(text):
 st.markdown("""
 <div style="text-align:center; padding:20px;">
     <h1 style="color:#0A66C2;">💬 AI Document Assistant</h1>
-    
 </div>
 """, unsafe_allow_html=True)
 
-
 # ============================================================
-# SIDEBAR UPLOAD (MULTIPLE PDFs FIXED)
+# SIDEBAR (UPLOAD + PROCESS)
 # ============================================================
 with st.sidebar:
 
     st.header("📁 Upload PDF Documents")
 
-    # ✅ MULTIPLE FILE UPLOAD ENABLED
     uploaded_files = st.file_uploader(
         "Choose PDF file(s)",
         type=["pdf"],
@@ -142,43 +68,32 @@ with st.sidebar:
 
         if st.button("🚀 Process Documents"):
 
-            # ✅ Reset chat if new files uploaded
-            current_files = [file.name for file in uploaded_files]
-
-            if current_files != st.session_state.last_files:
-                st.session_state.messages = []
-                st.session_state.last_files = current_files
-
             with st.spinner("Processing PDFs..."):
 
                 all_chunks = []
-                combined_text = ""
 
                 # ============================================================
-                # Loop Through All PDFs
+                # PROCESS EACH PDF
                 # ============================================================
                 for uploaded_file in uploaded_files:
 
-                    # Extract Full Text
+                    # Extract text
                     full_text = extract_text_from_pdf(uploaded_file)
 
                     if full_text.strip() == "":
-                        st.error(f"❌ No readable text found in {uploaded_file.name}")
+                        st.error(f"No text found in {uploaded_file.name}")
                         continue
 
-                    combined_text += full_text + "\n"
-
-                    # Save each PDF temporarily
+                    # Save temp file
                     temp_name = f"temp_{uploaded_file.name}"
-
                     with open(temp_name, "wb") as f:
                         f.write(uploaded_file.getbuffer())
 
-                    # Load PDF with metadata
+                    # Load PDF
                     loader = PyPDFLoader(temp_name)
                     pages = loader.load()
 
-                    # Chunking
+                    # Split into chunks
                     splitter = RecursiveCharacterTextSplitter(
                         chunk_size=1000,
                         chunk_overlap=200
@@ -187,38 +102,26 @@ with st.sidebar:
                     chunks = splitter.split_documents(pages)
                     all_chunks.extend(chunks)
 
-                # ============================================================
-                # Detect Document Type (Combined)
-                # ============================================================
-                doc_type = detect_document_type(combined_text)
-                st.session_state.doc_type = doc_type
-
-                st.info(f"📌 Detected Document Type: {doc_type.upper()}")
-
-                # ============================================================
-                # Limit Chunks
-                # ============================================================
-                MAX_CHUNKS = 3000
-                if len(all_chunks) > MAX_CHUNKS:
-                    st.warning(f"⚠️ Large PDFs detected. Using first {MAX_CHUNKS} chunks.")
-                    all_chunks = all_chunks[:MAX_CHUNKS]
-
                 st.write("✅ Total Chunks Created:", len(all_chunks))
 
                 # ============================================================
-                # Upload to Qdrant
+                # CREATE QDRANT INDEX
                 # ============================================================
                 qdrant_client = create_qdrant_index(all_chunks)
+
+                # ✅ STORE IN SESSION (IMPORTANT FIX)
                 st.session_state.qdrant_client = qdrant_client
 
                 # ============================================================
-                # Load Chat Model
+                # LOAD CHAT MODEL
                 # ============================================================
                 chat_model = get_chat_model(api_key=EURI_API_KEY)
                 st.session_state.chat_model = chat_model
 
-                st.success("✅ All Documents Indexed Successfully!")
+                # ✅ MARK AS PROCESSED (MAIN FIX)
+                st.session_state.processed = True
 
+                st.success("✅ Documents processed successfully!")
 
 # ============================================================
 # CHAT UI
@@ -229,44 +132,31 @@ st.subheader("💬 Chat with Your Documents")
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
-        if msg.get("time"):
-            st.markdown(
-                f"<span style='font-size:0.8rem; color:#6c757d;'>⏱ {msg['time']}</span>",
-                unsafe_allow_html=True
-            )
-
 
 # ============================================================
 # USER INPUT
 # ============================================================
-if prompt := st.chat_input("Ask something about your uploaded documents..."):
+if prompt := st.chat_input("Ask something about your documents..."):
 
     # Store user message
-    
-    timestamp = datetime.now().strftime("%H:%M:%S")
     st.session_state.messages.append({
         "role": "user",
-        "content": prompt,
-        "time": timestamp
+        "content": prompt
     })
 
     with st.chat_message("user"):
         st.markdown(prompt)
-        st.markdown(
-            f"<span style='font-size:0.8rem; color:#6c757d;'>⏱ {timestamp}</span>",
-            unsafe_allow_html=True
-        )
 
     # ============================================================
-    # Assistant Response
+    # MAIN FIXED CONDITION
     # ============================================================
-    if st.session_state.qdrant_client and st.session_state.chat_model:
+    if st.session_state.get("processed", False):
 
         with st.chat_message("assistant"):
 
-            with st.spinner("🔍 Searching documents..."):
+            with st.spinner("🔍 Searching..."):
 
-                # Retrieve relevant chunks
+                # Retrieve chunks
                 relevant_chunks = retrive_similar_documents(
                     st.session_state.qdrant_client,
                     prompt,
@@ -275,69 +165,30 @@ if prompt := st.chat_input("Ask something about your uploaded documents..."):
 
                 context = "\n\n".join(relevant_chunks)
 
-                doc_type = st.session_state.doc_type
-
-                # ============================================================
-                # PROMPTS
-                # ============================================================
-                if doc_type == "medical":
-                    system_prompt = f"""You are MediChat Pro, an intelligent medical document assistant. 
-Answer based only on the documents.
-
-Medical Documents:
-{context}
-
-User Question: {prompt}
-
-Answer:"""
-
-                elif doc_type == "financial":
-                    system_prompt = f"""You are FinDoc Pro, an intelligent financial assistant.
-
-Financial Documents:
-{context}
-
-User Question: {prompt}
-
-Answer:"""
-
-                elif doc_type == "legal":
-                    system_prompt = f"""You are LawDoc Pro, an intelligent legal assistant.
-
-Legal Documents:
-{context}
-
-User Question: {prompt}
-
-Answer:"""
-
-                else:
-                    system_prompt = f"""You are DocChat Pro, an intelligent document assistant.
+                system_prompt = f"""
+You are an AI assistant.
 
 Documents:
 {context}
 
 User Question: {prompt}
 
-Answer:"""
+Answer:
+"""
 
-                # Ask AI Model
+                # Get response
                 response = ask_chat_model(
                     st.session_state.chat_model,
                     system_prompt
                 )
 
             st.markdown(response)
-            assistant_time = datetime.now().strftime("%H:%M:%S")
-            st.markdown(
-                f"<span style='font-size:0.8rem; color:#6c757d;'>⏱ {assistant_time}</span>",
-                unsafe_allow_html=True
-            )
 
-            # Store assistant response
-            st.session_state.messages.append(
-                {"role": "assistant", "content": response, "time": assistant_time}
-            )
+            # Save response
+            st.session_state.messages.append({
+                "role": "assistant",
+                "content": response
+            })
 
     else:
-        st.error("⚠️ Please upload and process documents first!")
+        st.error("⚠️ Please click 'Process Documents' first!")
