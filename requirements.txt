@@ -25,3 +25,5 @@ euriai
 
 # To keep the app awake
 streamlit-autorefresh
+pypdf
+crytography
